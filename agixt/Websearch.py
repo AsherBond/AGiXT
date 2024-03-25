@@ -315,7 +315,7 @@ class Websearch:
         user_input: str,
         url: str = "https://github.com/Josh-XT/AGiXT",
         proxy=None,
-    ):
+    ):  # Work in progress. Currently doesn't click the links as it is supposed to.
         openai.base_url = (
             self.agent_settings["API_URI"]
             if self.agent_settings["API_URI"]
