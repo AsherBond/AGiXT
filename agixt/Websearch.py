@@ -1,10 +1,14 @@
 import re
+import os
 import json
 import random
 import requests
 import logging
 import asyncio
 import urllib.parse
+from datetime import datetime
+import base64
+import openai
 from urllib.parse import urlparse
 from playwright.async_api import async_playwright
 from bs4 import BeautifulSoup
@@ -25,6 +29,11 @@ class Websearch:
         self.ApiClient = ApiClient
         self.agent_config = agent_config
         self.agent_settings = self.agent_config["settings"]
+        self.working_directory = (
+            self.agent_settings["WORKING_DIRECTORY"]
+            if "WORKING_DIRECTORY" in self.agent_settings
+            else os.path.join(os.getcwd(), "WORKSPACE")
+        )
         self.requirements = ["agixtsdk"]
         self.failures = []
         self.browsed_links = []
@@ -300,3 +309,188 @@ class Websearch:
                     logging.info("Websearch tasks completed.")
             else:
                 logging.info("No results found.")
+
+    async def browse_with_openai_vision(
+        self,
+        user_input: str,
+        url: str = "https://github.com/Josh-XT/AGiXT",
+        proxy=None,
+    ):
+        openai.base_url = (
+            self.agent_settings["API_URI"]
+            if self.agent_settings["API_URI"]
+            else "https://api.openai.com/v1/"
+        )
+        openai.api_key = (
+            self.agent_settings["OPENAI_API_KEY"]
+            if self.agent_settings["OPENAI_API_KEY"]
+            else "YOUR_OPENAI_API_KEY"
+        )
+        async with async_playwright() as p:
+            launch_options = {"headless": False}
+            if proxy:
+                launch_options["proxy"] = {"server": proxy}
+            browser = await p.chromium.launch(**launch_options)
+            page = await browser.new_page()
+            await page.set_viewport_size(
+                {"width": 1920, "height": 1080}
+            )  # Set a larger window size
+            await page.goto(url)
+
+            while True:
+                content = await page.content()
+                soup = BeautifulSoup(content, "html.parser")
+                for script in soup(["script", "style"]):
+                    script.extract()  # Remove scripts and styles for cleaner text
+                selectors = []
+                for link in soup.find_all("a"):
+                    if link.get("href"):
+                        selectors.append(f"a[href='{link.get('href')}']")
+                for button in soup.find_all("button"):
+                    selectors.append(f"button:contains('{button.text}')")
+                for input_field in soup.find_all("input"):
+                    selectors.append(f"input[name='{input_field.get('name')}']")
+                text = soup.get_text()
+                text = " ".join(text.split())
+                prompt = f"""
+Text Content of {url}:
+{text}
+
+Selectors on the page:
+{selectors}
+
+System:
+**The assistant is the a web browsing abstraction engine. The user is blind and is communicating over voice, the assistant handles all browser interactions with Playwright based on the user's message.**
+
+**The assistant is running within the `browse_web` function and the response of the assistant is the code that will be executed in the `send_to_ai` function. Return the full `send_to_ai` function.**
+
+```python
+async def browse_web(
+    self,
+    user_input: str,
+    url: str = "https://github.com/Josh-XT/AGiXT",
+    proxy=None,
+):
+    async with async_playwright() as p:
+        browser = await p.chromium.launch()
+        page = await browser.new_page()
+        await page.goto(url)
+        while True:
+            content = await page.content()
+            soup = BeautifulSoup(content, "html.parser")
+            for script in soup(["script", "style"]):
+                script.extract()  # Remove scripts and styles for cleaner text
+            selectors = []
+            for link in soup.find_all("a"):
+                if link.get("href"):
+                    selectors.append(f"a[href='{{link.get('href')}}']")
+            for button in soup.find_all("button"):
+                selectors.append(f"button:contains('{{button.text}}')")
+            for input_field in soup.find_all("input"):
+                selectors.append(f"input[name='{{input_field.get('name')}}']")
+            text = soup.get_text()
+            text = " ".join(text.split())
+            prompt = "The full prompt was generated from this"
+            response = openai.chat.completions.create(
+                model="gpt-4-turbo-preview",
+                messages=[
+                    {{"role": "user", "content": prompt}},
+                ],
+                max_tokens=1024,
+                temperature=0.7,
+                top_p=0.9,
+            )
+            llm_response = response.choices[0].message.content
+            print(llm_response)
+            python_code_blocks = re.findall(
+                r"```python(.*?)```", llm_response, re.DOTALL
+            )
+            if not python_code_blocks:
+                break  # Exit the loop if no more code blocks are returned
+            for code_block in python_code_blocks:
+                # Save the code block to a python file in the WORKSPACE directory
+                code_block = code_block.strip()
+                code_block = f"from bs4 import BeautifulSoup\n{{code_block}}"
+                # overwrite it
+                with open(
+                    f"WORKSPACE/web_browsing_code.py", "w"
+                ) as f:
+                    f.write(code_block + "\n")
+                from WORKSPACE.web_browsing_code import send_to_ai
+                await send_to_ai(page, text, selectors, user_input) # Send the text content and selectors to the AI to write code to interact with the page based on the users input
+```
+
+
+User: {user_input}
+                """
+                response = openai.chat.completions.create(
+                    model="gpt-4-turbo-preview",
+                    messages=[
+                        {"role": "user", "content": prompt},
+                    ],
+                    max_tokens=1024,
+                    temperature=0.7,
+                    top_p=0.9,
+                )
+                llm_response = response.choices[0].message.content
+                print(llm_response)
+                python_code_blocks = re.findall(
+                    r"```python(.*?)```", llm_response, re.DOTALL
+                )
+                if not python_code_blocks:
+                    break
+                for code_block in python_code_blocks:
+                    code_block = code_block.strip()
+                    code_block = f"from bs4 import BeautifulSoup\n{code_block}"
+                    with open(
+                        f"{self.working_directory}/web_browsing_code.py", "w"
+                    ) as f:
+                        f.write(code_block + "\n")
+                    try:
+                        from WORKSPACE.web_browsing_code import send_to_ai
+
+                        await send_to_ai(page, text, selectors, user_input)
+                    except Exception as e:
+                        logging.info(f"Error: {e}")
+                        break
+            await browser.close()
+
+
+if __name__ == "__main__":
+    import asyncio
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Browse for user")
+    parser.add_argument(
+        "--api_key",
+        type=str,
+        default="AGiXT",
+        help="The name of the agent to use",
+    )
+    parser.add_argument(
+        "--api_uri",
+        type=str,
+        default="https://api.openai.com/v1/",
+        help="The URL of the OpenAI API",
+    )
+    parser.add_argument(
+        "--user_input",
+        type=str,
+        help="The user's input to the assistant",
+    )
+    parser.add_argument(
+        "--url",
+        type=str,
+        default="https://github.com/Josh-XT/AGiXT",
+        help="The URL of the website to browse",
+    )
+    args = parser.parse_args()
+
+    asyncio.run(
+        Websearch(
+            agent_name="gpt4free",
+            agent_config={
+                "settings": {"API_URI": args.api_uri, "OPENAI_API_KEY": args.api_key}
+            },
+        ).browse_with_openai_vision(user_input=args.user_input, url=args.url)
+    )
