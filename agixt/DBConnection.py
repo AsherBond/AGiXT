@@ -56,8 +56,25 @@ def get_session():
 class User(Base):
     __tablename__ = "user"
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    email = Column(String, default=DEFAULT_USER, unique=True)
-    role = Column(String, default="user")
+    email = Column(String, unique=True)
+    first_name = Column(String, default="", nullable=True)
+    last_name = Column(String, default="", nullable=True)
+    company_name = Column(String, default="", nullable=True)
+    job_title = Column(String, default="", nullable=True)
+    role = Column(String, default="user", nullable=True)
+    mfa_token = Column(String, default="", nullable=True)
+    created_at = Column(DateTime, server_default=text("now()"))
+    updated_at = Column(DateTime, server_default=text("now()"), onupdate=text("now()"))
+    is_active = Column(Boolean, default=True)
+
+
+class FailedLogins(Base):
+    __tablename__ = "failed_logins"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("user.id"))
+    user = relationship("User")
+    ip_address = Column(String, default="", nullable=True)
+    created_at = Column(DateTime, server_default=text("now()"))
 
 
 class Provider(Base):
